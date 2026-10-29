@@ -1,114 +1,99 @@
-# 📌 KẾ HOẠCH DỰ ÁN: ỨNG DỤNG ĐIỂM DANH THÔNG MINH (GEODAT / CÓ MẶT)
+# 📌 KẾ HOẠCH DỰ ÁN: NỀN TẢNG ĐIỂM DANH & QUẢN TRỊ SỰ KIỆN MỞ
 
-> **Mục tiêu:** Xây dựng ứng dụng web điểm danh cuộc họp/công sở kết hợp **Mã QR** và **Bán kính vị trí (GPS/Geofencing)**, tối ưu tốc độ thao tác (dưới 5 giây), giao diện thân thiện với cán bộ và chống gian lận hiệu quả.
-
----
-
-## 🛠 1. TECH STACK & CÔNG NGHỆ SỬ DỤNG
-
-| Thành phần | Công nghệ | Chi tiết sử dụng |
-| :--- | :--- | :--- |
-| **Framework** | **Next.js 14+ (App Router)** | TypeScript, Server Actions / Route Handlers |
-| **Styling** | **Tailwind CSS + Lucide Icons** | Giao diện Mobile-first, nhẹ, font chữ to rõ ràng |
-| **Database** | **Supabase (PostgreSQL)** | Lưu trữ dữ liệu, Realtime Channel (đồng bộ tức thì) |
-| **QR Engine** | `html5-qrcode` & `qrcode.react` | Quét mã bằng camera điện thoại và tạo mã hiển thị |
-| **Định vị** | Web Geolocation API + Haversine | Lấy tọa độ và tính khoảng cách bán kính (mét) |
-| **Hosting & Cloud** | **Vercel** + **Supabase Cloud** | Tích hợp sẵn HTTPS miễn phí, Deploy qua GitHub |
+> **Định hướng kiến trúc:** Xây dựng dưới dạng **Hệ thống mô-đun (Modular Platform)**. Phiên bản hiện tại tập trung phát triển mô-đun cốt lõi: **Điểm danh mở bằng Tọa độ (Map/GPS) + Mã QR + Mã số động + Form tùy biến + Xuất Excel**. Các mô-đun khác (biểu quyết, tài liệu, quản lý thành viên) sẽ được tích hợp nối tiếp trên cùng một khung cấu trúc.
 
 ---
 
-## 🏗 2. KIẾN TRÚC DỮ LIỆU (DATABASE SCHEMA - SUPABASE)
+## 🏗 1. ĐỊNH HƯỚNG KIẾN TRÚC MỞ (EXTENSIBLE ARCHITECTURE)
 
-### 2.1. Bảng `events` (Danh sách cuộc họp/sự kiện)
-* `id` (UUID, Primary Key)
-* `title` (TEXT): Tên cuộc họp (ví dụ: "Họp giao ban tháng 10")
-* `target_lat` (FLOAT): Vĩ độ phòng họp
-* `target_lng` (FLOAT): Kinh độ phòng họp
-* `radius_meters` (INT): Bán kính cho phép (mặc định: 70m - 100m)
-* `pin_code` (VARCHAR): Mã PIN xác thực nhanh (4 số)
-* `is_active` (BOOLEAN): Trạng thái mở/đóng điểm danh
-* `created_at` (TIMESTAMPTZ)
+Để đảm bảo dễ dàng mở rộng nhiều tính năng sau này, hệ thống tuân theo các nguyên tắc:
 
-### 2.2. Bảng `attendees` (Danh sách triệu tập)
-* `id` (UUID, Primary Key)
-* `event_id` (UUID, Foreign Key -> `events.id`)
-* `full_name` (TEXT): Họ và tên cán bộ
-* `code` (TEXT): Mã cán bộ / 3 số cuối CCCD
-* `department` (TEXT): Phòng ban / Đơn vị
-* `status` (VARCHAR): `'CHUA_DEN'` | `'DA_DEN'` | `'DEN_MUON'`
-
-### 2.3. Bảng `checkin_logs` (Nhật ký điểm danh thực tế)
-* `id` (UUID, Primary Key)
-* `event_id` (UUID, Foreign Key)
-* `attendee_id` (UUID, Foreign Key)
-* `device_fingerprint` (TEXT): Mã định danh thiết bị (chống 1 máy bấm hộ)
-* `user_lat` (FLOAT): Vĩ độ lúc bấm
-* `user_lng` (FLOAT): Kinh độ lúc bấm
-* `distance_meters` (INT): Khoảng cách thực tế so với hội trường
-* `created_at` (TIMESTAMPTZ): Thời điểm điểm danh chính xác
+* **Next.js Modular Directory:** Tổ chức mã nguồn theo mô-đun nghiệp vụ (Feature-based folder structure). Mỗi tính năng độc lập về giao diện, API và logic.
+* **Cơ sở dữ liệu linh hoạt với PostgreSQL JSONB:** Sử dụng kiểu dữ liệu `JSONB` của PostgreSQL (trên Supabase) để lưu cấu hình tính năng và các trường dữ liệu tùy biến mà không cần phải thay đổi cấu trúc bảng (Schema migration) mỗi khi thêm tính năng mới.
+* **Plugin/Feature Flag System:** Bảng `events` quản lý các tính năng được bật/tắt (ví dụ: `features: { checkin: true, voting: false, documents: false }`).
 
 ---
 
-## 📱 3. LUỒNG NGHIỆP VỤ & TRẢI NGHIỆM NGƯỜI DÙNG (USER FLOW)
+## 📋 2. ĐẶC TẢ CHI TIẾT PHÂN HỆ ĐIỂM DANH (CURRENT FEATURE)
 
-### Luồng 1: Cán bộ tham dự (Thao tác trên Mobile Web)
-1. **Quét mã:** Quét mã QR tại cửa hội trường hoặc bàn họp $\rightarrow$ Mở trang Web `https://domain.com/checkin/[event_id]`.
-2. **Cấp quyền:** Trình duyệt xin quyền Vị trí (GPS).
-3. **Nhập định danh:** 
-   * Gõ 2 ký tự tên hoặc Mã cán bộ (hệ thống tự gợi ý tên).
-   * Nhập mã PIN 4 số (chiếu trên màn hình hội trường).
-4. **Xác thực tự động:**
-   * Tính khoảng cách: Nếu $> 100\text{m}$ $\rightarrow$ Báo đỏ: *"Bạn đang cách phòng họp X mét"*.
-   * Kiểm tra máy: Nếu máy này đã điểm danh cho người khác $\rightarrow$ Báo chặn gian lận.
-5. **Thành công:** Màn hình xanh hiện *"Xác nhận có mặt thành công"*.
+### A. Phía Người chủ trì (Host / Admin)
+1. **Thiết lập vị trí điểm danh (2 lựa chọn):**
+   * *Cách 1 (Nhanh):* Bấm nút *"Lấy vị trí hiện tại của tôi"* (dùng GPS của trình duyệt).
+   * *Cách 2 (Trực quan):* Mở bản đồ tương tác (OpenStreetMap / Leaflet - 0 đồng), ghim vị trí tổ chức và chọn bán kính cho phép (ví dụ: 50m, 100m, 200m).
+2. **Cấu hình Form thông tin người tham dự (Custom Dynamic Fields):**
+   * Vì không có danh sách nạp trước, Host được quyền cấu hình các câu hỏi/thông tin cần thu thập khi check-in (ví dụ: *Họ tên [bắt buộc]*, *Số điện thoại*, *Đơn vị công tác*, *Chức vụ*, *Ghi chú*...).
+3. **Màn hình điều khiển sự kiện (Host Control Screen / Máy chiếu):**
+   * **Hiển thị Mã QR:** Dẫn trực tiếp tới trang check-in của phiên đó.
+   * **Mã số ngẫu nhiên đổi liên tục (Dynamic PIN/OTP):** Màn hình hiển thị một mã số ngẫu nhiên (ví dụ 4 số: `4829`) tự động đổi sau mỗi 30–60 giây (đồng bộ qua Supabase Realtime). Người tham gia bắt buộc phải nhìn thấy mã này mới nhập được.
+   * **Danh sách thời gian thực:** Nhảy tên người vừa điểm danh kèm mốc thời gian.
+4. **Tổng kết & Xuất báo cáo:**
+   * Bấm nút **"Xuất file Excel (.xlsx)"**: Tự động tổng hợp đầy đủ họ tên, các trường tùy chỉnh, thời gian check-in chính xác và khoảng cách tọa độ thực tế.
 
-### Luồng 2: Thư ký / Quản trị viên (Màn hình máy tính / Máy chiếu)
-1. Tạo cuộc họp mới, thiết lập vị trí và tải file Excel danh sách triệu tập lên.
-2. Bật trang **Dashboard Máy chiếu**: Hiển thị mã QR lớn, mã PIN 4 số và tỷ lệ quân số real-time (`28/30 đồng chí`).
-3. Xuất file báo cáo Excel sau khi kết thúc cuộc họp.
-
----
-
-## 📅 4. LỘ TRÌNH THỰC HIỆN CHI TIẾT (5 GIAI ĐOẠN)
-
-### GIAI ĐOẠN 1: Khởi tạo & Thiết kế Dữ liệu (Ngày 1 - 2)
-- [ ] Khởi tạo dự án: `npx create-next-app@latest --typescript --tailwind --app`.
-- [ ] Cài đặt các thư viện phụ trợ: `@supabase/supabase-js`, `lucide-react`, `html5-qrcode`, `geolib`.
-- [ ] Tạo Project trên Supabase, chạy script SQL tạo 3 bảng (`events`, `attendees`, `checkin_logs`).
-- [ ] Thiết lập biến môi trường `.env.local` (`NEXT_PUBLIC_SUPABASE_URL`, `ANON_KEY`).
-
-### GIAI ĐOẠN 2: Phát triển Core Check-in & Logic Vị trí (Ngày 3 - 4)
-- [ ] Xây dựng giao diện trang `/checkin/[id]` (Mobile-First, nút to, dễ bấm).
-- [ ] Viết hàm client lấy tọa độ GPS: `navigator.geolocation.getCurrentPosition`.
-- [ ] Viết API Route `/api/checkin`:
-  - Logic tính khoảng cách Haversine.
-  - Logic kiểm tra mã PIN cuộc họp.
-  - Logic kiểm tra chống bấm hộ bằng `deviceId` (chỉ khóa khi Insert DB thành công).
-
-### GIAI ĐOẠN 3: Trang Quản trị & Màn hình chiếu Realtime (Ngày 5 - 6)
-- [ ] Xây dựng trang `/admin`: Tạo sự kiện, lấy tọa độ qua Google Maps/bấm trực tiếp.
-- [ ] Chức năng Import danh sách cán bộ từ file Excel/CSV.
-- [ ] Xây dựng trang `/live/[id]` dành cho máy chiếu:
-  - Tích hợp **Supabase Realtime**: Khi có bản ghi mới ở `checkin_logs`, màn hình tự động "Ting" và nhảy tên người vừa đến mà không cần F5.
-
-### GIAI ĐOẠN 4: Xử lý Ngoại lệ, Bảo mật & Tối ưu UX (Ngày 7 - 8)
-- [ ] Xử lý ngoại lệ: Báo lỗi thân thiện khi người dùng lỡ bấm "Chặn quyền vị trí".
-- [ ] Thêm nút dự phòng cho Thư ký: "Điểm danh hộ bằng tay" và "Mở khóa thiết bị".
-- [ ] Tối ưu bán kính geofence: Mặc định $80\text{m} - 100\text{m}$ để chống trôi GPS trong phòng kín.
-
-### GIAI ĐOẠN 5: Triển khai lên Cloud & Thử nghiệm thực tế (Ngày 9 - 10)
-- [ ] Đẩy code lên GitHub.
-- [ ] Kết nối GitHub với **Vercel** để tự động build và cấp domain HTTPS.
-- [ ] Thử nghiệm thực tế với 5–10 thiết bị khác nhau (iPhone, Android, máy cũ).
-- [ ] Bàn giao và viết tài liệu hướng dẫn sử dụng 1 trang.
+### B. Phía Người tham dự (Attendee Flow)
+1. Dùng điện thoại quét mã QR $\rightarrow$ Trình duyệt mở trang web check-in.
+2. Trình duyệt yêu cầu cấp quyền vị trí $\rightarrow$ Lấy tọa độ GPS người dùng.
+3. Người dùng nhập:
+   * Họ và tên.
+   * Các trường thông tin tùy chỉnh do Host yêu cầu.
+   * **Mã số ngẫu nhiên** đang hiển thị trên màn hình của Host.
+4. Bấm **"Xác nhận có mặt"**:
+   * Hệ thống tính khoảng cách giữa người dùng và vị trí đã ghim.
+   * Kiểm tra mã ngẫu nhiên có hợp lệ trong chu kỳ thời gian hay không.
+   * Nếu hợp lệ: Báo thành công và khóa thiết bị không cho gửi trùng.
 
 ---
 
-## 🚀 5. QUY TRÌNH CHUẨN ĐỂ XÂY DỰNG MỘT ỨNG DỤNG WEB (BEST PRACTICES)
+## 🗄 3. THIẾT KẾ CƠ SỞ DỮ LIỆU MỞ (SUPABASE / POSTGRESQL)
 
-Để biến một ý tưởng thành sản phẩm web thực tế hoạt động trơn tru, bạn cần tuân theo 6 bước quy trình công nghệ chuẩn sau:
+```sql
+-- 1. BẢNG SỰ KIỆN / PHIÊN HỌP (Mở rộng cho nhiều tính năng)
+CREATE TABLE events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title VARCHAR(255) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  status VARCHAR(50) DEFAULT 'active', -- 'draft', 'active', 'closed'
+  
+  -- Cấu hình vị trí (Module Geofencing)
+  location_lat DOUBLE PRECISION,
+  location_lng DOUBLE PRECISION,
+  radius_meters INT DEFAULT 100,
+  
+  -- Cấu hình động cho các tính năng tương lai (JSONB)
+  -- Ví dụ: {"voting_enabled": false, "doc_sharing": false}
+  module_settings JSONB DEFAULT '{}',
+  
+  -- Cấu hình các trường thông tin cần nhập (Dynamic Fields Form)
+  -- Ví dụ: [{"key": "phone", "label": "Số điện thoại", "type": "text", "required": true}]
+  custom_fields JSONB DEFAULT '[]'
+);
 
-```text
-[1. Khảo sát & Đặc tả] ──> [2. Thiết kế Prototype] ──> [3. Thiết lập Hạ tầng]
-                                                              │
-[6. Vận hành & Tối ưu] <── [5. Đưa lên Cloud (Deploy)] <── [4. Lập trình & Test]
+-- 2. BẢNG MÃ SỐ NGẪU NHIÊN ĐỔI THEO THỜI GIAN (Dynamic PIN)
+CREATE TABLE event_pins (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id UUID REFERENCES events(id) ON DELETE CASCADE,
+  current_pin VARCHAR(6) NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. BẢNG DỮ LIỆU ĐIỂM DANH (Lưu trữ linh hoạt dữ liệu tùy biến)
+CREATE TABLE attendance_records (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id UUID REFERENCES events(id) ON DELETE CASCADE,
+  full_name VARCHAR(255) NOT NULL,
+  
+  -- Dữ liệu tùy biến người dùng nhập theo custom_fields
+  -- Ví dụ: {"phone": "0912345678", "don_vi": "Phòng Kế hoạch"}
+  custom_data JSONB DEFAULT '{}',
+  
+  -- Dữ liệu xác thực vị trí & thiết bị
+  user_lat DOUBLE PRECISION,
+  user_lng DOUBLE PRECISION,
+  distance_meters DOUBLE PRECISION,
+  device_id VARCHAR(255),
+  checked_in_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Bật Realtime cho 2 bảng này trên Supabase Dashboard:
+-- 1. event_pins (để màn hình và client đồng bộ mã PIN)
+-- 2. attendance_records (để màn hình Host tự cập nhật số lượng)
